@@ -7,6 +7,8 @@ library(rvest, quietly = TRUE)
 library(parallel)
 library(purrr)
 library(lubridate)
+library(RSelenium)
+
 
 
 get_variable_value <- function(node, variable_name) {
@@ -85,7 +87,7 @@ paste_names <- function(lst) {
 
 
 
-process_ABR_node <- function(node) {
+scrape_main_ABN_df <- function(node) {
   
   recordLastUpdatedDate <- ymd(xmlGetAttr(node, 'recordLastUpdatedDate'))
   replaced <- xmlGetAttr(node, 'replaced')
@@ -168,10 +170,111 @@ process_ABR_node <- function(node) {
   
 }
 
+scrape_trading_names_df <- function(node) {
+  
+  other_ent_nodes <- getNodeSet(node, 'OtherEntity')
+  
+  if(length(other_ent_nodes)) {
+    
+    abn <- xmlValue(getNodeSet(node, 'ABN')[[1]])
+    
+    type <- unlist(lapply(other_ent_nodes, function(x) {xmlGetAttr(getNodeSet(x, 'NonIndividualName')[[1]], 'type')}))
+    name <- unlist(lapply(other_ent_nodes, 
+                          function(x) {xmlValue(getNodeSet(getNodeSet(x, 'NonIndividualName')[[1]], 'NonIndividualNameText')[[1]])}))
+    
+    df <- data.frame(name = name, type = type)
+    
+    df$abn <- abn
+    
+    df <- df[, c('abn', 'name', 'type')]
+    
+  } else{
+    
+    
+    df <- data.frame(matrix(nrow = 0, ncol = 0))
+    
+    
+  }
+  
+  return(df)
+  
+}
 
 
+scrape_dgr_df <- function(node) {
+  
+  dgr_nodes <- getNodeSet(node, 'DGR')
+  
+  if(length(dgr_nodes)) {
+    
+    abn <- xmlValue(getNodeSet(node, 'ABN')[[1]])
+    
+    dgr_status_from_date <- do.call(c, lapply(dgr_nodes, function(x) {ymd(xmlGetAttr(x, 'DGRStatusFromDate'))}))
+    type <- unlist(lapply(dgr_nodes, function(x) {xmlGetAttr(getNodeSet(x, 'NonIndividualName')[[1]], 'type')}))
+    name <- unlist(lapply(dgr_nodes, 
+                          function(x) {xmlValue(getNodeSet(getNodeSet(x, 'NonIndividualName')[[1]], 'NonIndividualNameText')[[1]])}))
+    
+    df <- data.frame(name = name, type = type, dgr_status_from_date = dgr_status_from_date)
+    
+    df$abn <- abn
+    
+    df <- df[, c('abn', 'name', 'type', 'dgr_status_from_date')]
+    
+  } else{
+    
+    
+    df <- data.frame(matrix(nrow = 0, ncol = 0))
+    
+    
+  }
+  
+  return(df)
+  
+}
 
 
+process_abr_node_data <- function(node, pg) {
+  
+  main_df <- scrape_main_ABN_df(node)
+  trading_names_df <- scrape_trading_names_df(node)
+  dgr_df <- scrape_dgr_df(node)
+  
+  
+  dbWriteTable(pg, c("abn_lookup", "abns"),
+               main_df, append = TRUE, row.names = FALSE)
+  dbWriteTable(pg, c("abn_lookup", "trading_names"),
+               trading_names_df, append = TRUE, row.names = FALSE)
+  dbWriteTable(pg, c("abn_lookup", "dgr"),
+               dgr_df, append = TRUE, row.names = FALSE)
+  
+
+}
+
+
+download_xml_files <- function() {
+  
+  abr_download_url <- "http://data.gov.au/dataset/abn-bulk-extract"
+  
+  
+  
+  
+}
+
+remDr <- remoteDriver(remoteServerAddr = "localhost"
+                      , port = 4444
+                      , browserName = "firefox"
+)
+
+
+driver <- rsDriver(browser=c("firefox"))
+remote_driver <- driver[["client"]]
+remote_driver$open()
+
+driver <- rsDriver(browser=c("chrome"))
+remote_driver <- driver[["client"]]
+remote_driver$open()
+
+pg <- dbConnect(PostgreSQL())
 
 
 xml_parse <- xmlParse('20190710_Public02.xml')
@@ -183,4 +286,12 @@ table(unlist(mclapply(abr_nodes, function(x) {names(xmlAttrs(x))}, mc.cores = 24
 
 table(unlist(mclapply(abr_nodes, function(x) {sum(names(xmlAttrs(x)) == 'recordLastUpdatedDate')}, mc.cores = 24)))
 table(unlist(mclapply(abr_nodes, function(x) {sum(names(xmlAttrs(x)) == 'replaced')}, mc.cores = 24)))
+
+
+
+dbDisconnect(pg)
+
+no_given_names <- which(unlist(mclapply(has_leg_ent, function(x) {sum(names(xmlChildren(getNodeSet(getNodeSet(abr_nodes[[x]], 'LegalEntity')[[1]], 'IndividualName')[[1]])) == 'GivenName')}, mc.cores = 24)) == 0)
+df <- bind_rows(lapply(no_given_names, function (x) {process_ABR_node(abr_nodes[[has_leg_ent[x]]])}), .id = "column_label") %>% collect()
+
 

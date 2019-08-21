@@ -1,4 +1,4 @@
-library(XML)
+library(xml2)
 library(readr)
 library(RCurl)
 library(dplyr)
@@ -7,291 +7,193 @@ library(rvest, quietly = TRUE)
 library(parallel)
 library(purrr)
 library(lubridate)
-library(RSelenium)
 
 
 
-get_variable_value <- function(node, variable_name) {
+scrape_main_ABN_df <- function(file_name) {
   
-  # This is a function for extracting the values from fields which ONLY APPEAR ONCE under a node
-  # Returns the value in the field if it exists, returns NA if the field does not exist
-  
-  variable_node_list <- getNodeSet(node, variable_name)
-  
-  if(length(variable_node_list) == 0) {
-    
-    return(NA)
-    
-  } else{
-    
-    value <- xmlValue(variable_node_list[[1]])
-    
-    return(value)
-    
-  }
-  
-}
+  xml_parse <- read_xml(file_name)
+  root <- xml_root(xml_parse)
+  nodes <- xml_find_all(root, 'ABR')
 
-
-get_variable_attribute <- function(node, variable_name, attribute_name) {
-  
-  # This is a function for extracting the attributes from fields which ONLY APPEAR ONCE under a node
-  # Returns the attribute in the node if it exists, returns NA if the node does not exist
-  
-  variable_node_list <- getNodeSet(node, variable_name)
-  
-  if(length(variable_node_list) == 0) {
-    
-    return(NA)
-    
-  } else{
-    
-    value <- xmlGetAttr(variable_node_list[[1]], attribute_name)
-    
-    return(value)
-    
-  }
-  
-}
-
-
-paste_names <- function(lst) {
-  
-  # This function is for pasting the given names in the LegalEntity node into a single string
-  
-  if(length(lst) == 0) {
-    
-    return(NA)
-    
-  }
-  
-  else if(length(lst) == 1) {
-  
-    return(lst[[1]])
-  
-  }
-  
-  else {result = lst[[1]]
-  
-  for(i in 2:length(lst)) {
-    
-    result <- paste(result, lst[[i]], sep = " ")
-    
-  }
-  
-  return(result)
-  
-  }
-  
-}
-
-
-
-scrape_main_ABN_df <- function(node) {
-  
-  recordLastUpdatedDate <- ymd(xmlGetAttr(node, 'recordLastUpdatedDate'))
-  replaced <- xmlGetAttr(node, 'replaced')
-  
-  abn_node <- getNodeSet(node, 'ABN')[[1]]
-  abn <- xmlValue(abn_node)
-  abn_status <- xmlGetAttr(abn_node, 'status')
-  abn_status_from_date <- ymd(xmlGetAttr(abn_node, 'ABNStatusFromDate'))
-  
-  entity_type_node <- getNodeSet(node, 'EntityType')[[1]]
-  entity_type_index <- xmlValue(getNodeSet(entity_type_node, 'EntityTypeInd')[[1]])
-  entity_type_text <- xmlValue(getNodeSet(entity_type_node, 'EntityTypeText')[[1]])
-  
-  asic_number <- get_variable_value(node, 'ASICNumber')
-  asic_number_type <- get_variable_attribute(node, 'ASICNumber', 'ASICNumberType')
-  
-  gst_status <- get_variable_attribute(node, 'GST', 'status')
-  gst_status_from_date <- ymd(get_variable_attribute(node, 'GST', 'GSTStatusFromDate'))
-  
-  main_ent <- getNodeSet(node, 'MainEntity')
-  if(length(main_ent)) {
-    
-    main_ent_node <- main_ent[[1]]
-    main_ent_type <- xmlGetAttr(getNodeSet(main_ent_node, 'NonIndividualName')[[1]], 'type')
-    main_ent_name <- xmlValue(getNodeSet(getNodeSet(main_ent_node, 'NonIndividualName')[[1]], 'NonIndividualNameText')[[1]])
-    main_ent_add_state <- xmlValue(getNodeSet(
-    getNodeSet(getNodeSet(main_ent_node, 'BusinessAddress')[[1]], 'AddressDetails')[[1]], 'State')[[1]])
-    main_ent_add_postcode <- xmlValue(getNodeSet(
-    getNodeSet(getNodeSet(main_ent_node, 'BusinessAddress')[[1]], 'AddressDetails')[[1]], 'Postcode')[[1]])
-    
-  } else {
-    
-    main_ent_type <- NA
-    main_ent_name <- NA
-    main_ent_add_state <- NA
-    main_ent_add_postcode <- NA
-    
-  }
-  
-  legal_ent <- getNodeSet(node, 'LegalEntity')
-  if(length(legal_ent)) {
-    
-    legal_ent_node <- legal_ent[[1]]
-    legal_ent_in_node <- getNodeSet(legal_ent_node, 'IndividualName')[[1]]
-    legal_ent_type <- xmlGetAttr(legal_ent_in_node, 'type')
-    
-    legal_ent_title <- get_variable_value(legal_ent_in_node, 'NameTitle')
-    legal_ent_fam_name <- xmlValue(getNodeSet(legal_ent_in_node, 'FamilyName')[[1]])
-    legal_ent_given_names <- paste_names(lapply(getNodeSet(legal_ent_in_node, 'GivenName'), xmlValue))
-    
-    legal_ent_add_state <- xmlValue(getNodeSet(
-    getNodeSet(getNodeSet(legal_ent_node, 'BusinessAddress')[[1]], 'AddressDetails')[[1]], 'State')[[1]])
-    legal_ent_add_postcode <- xmlValue(getNodeSet(
-    getNodeSet(getNodeSet(legal_ent_node, 'BusinessAddress')[[1]], 'AddressDetails')[[1]], 'Postcode')[[1]])
-    
-  } else {
-    
-    legal_ent_type <- NA
-    legal_ent_title <- NA
-    legal_ent_fam_name <- NA
-    legal_ent_given_names <- NA
-    legal_ent_add_state <- NA
-    legal_ent_add_postcode <- NA
-    
-  }
-  
-  
-  df <- data.frame(abn = abn, abn_status = abn_status, abn_status_from_date = abn_status_from_date, 
-        recordLastUpdatedDate = recordLastUpdatedDate, replaced = replaced, entity_type_index = entity_type_index, 
-        entity_type_text = entity_type_text, asic_number = asic_number, asic_number_type = asic_number_type, 
-        gst_status = gst_status, gst_status_from_date = gst_status_from_date, main_ent_type = main_ent_type,
-        main_ent_name = main_ent_name, main_ent_add_state = main_ent_add_state, 
-        main_ent_add_postcode = main_ent_add_postcode, legal_ent_type = legal_ent_type, 
-        legal_ent_title = legal_ent_title, legal_ent_fam_name = legal_ent_fam_name, 
-        legal_ent_given_names = legal_ent_given_names, legal_ent_add_state = legal_ent_add_state, 
-        legal_ent_add_postcode = legal_ent_add_postcode)
+  all_cols <- c('abn', 'abn_status', 'abn_status_from_date', 'record_last_updated_date', 'replaced', 'entity_type_index', 
+                'entity_type_text', 'asic_number', 'asic_number_type', 'gst_status', 'gst_status_from_date', 
+                'main_ent_type', 'main_ent_name', 'main_ent_add_state', 'main_ent_add_postcode', 'legal_ent_type', 
+                'legal_ent_title', 'legal_ent_family_name', 'legal_ent_given_names', 'legal_ent_add_state', 
+                'legal_ent_add_postcode')
+  df <- data.frame(matrix(nrow = length(nodes), ncol = length(all_cols)), stringsAsFactors = FALSE)
+  colnames(df) <- all_cols
+ 
+  df$abn <- xml_text(xml_find_first(nodes, 'abn'))
+  df$abn_status <- xml_text(xml_find_first(nodes, 'abn_status'))
+  df$abn_status_from_date <- ymd(xml_text(xml_find_first(nodes, 'abn_status_from_date')))
+  df$record_last_updated_date <- ymd(xml_text(xml_find_first(nodes, 'record_last_updated_date')))
+  df$replaced <- xml_text(xml_find_first(nodes, 'replaced'))
+  df$entity_type_index <- xml_text(xml_find_first(nodes, 'entity_type_index'))
+  df$asic_number <- xml_text(xml_find_first(nodes, 'asic_number'))
+  df$asic_number_type <- xml_text(xml_find_first(nodes, 'asic_number_type'))
+  df$gst_status <- xml_text(xml_find_first(nodes, 'gst_status'))
+  df$gst_status_from_date <- ymd(xml_text(xml_find_first(nodes, 'gst_status_from_date')))
+  df$main_ent_type <- xml_text(xml_find_first(nodes, 'main_ent_type'))
+  df$main_ent_name <- xml_text(xml_find_first(nodes, 'main_ent_name'))
+  df$main_ent_add_state <- xml_text(xml_find_first(nodes, 'main_ent_add_state'))
+  df$main_ent_add_postcode <- xml_text(xml_find_first(nodes, 'main_ent_add_postcode'))
+  df$legal_ent_type <- xml_text(xml_find_first(nodes, 'legal_ent_type'))
+  df$legal_ent_title <- xml_text(xml_find_first(nodes, 'legal_ent_title'))
+  df$legal_ent_family_name <- xml_text(xml_find_first(nodes, 'legal_ent_family_name'))
+  df$legal_ent_given_names <- xml_text(xml_find_first(nodes, 'legal_ent_given_names'))
+  df$legal_ent_add_state <- xml_text(xml_find_first(nodes, 'legal_ent_add_state'))
+  df$legal_ent_add_postcode <- xml_text(xml_find_first(nodes, 'legal_ent_add_postcode'))
   
   
   return(df)
   
+  
 }
 
-scrape_trading_names_df <- function(node) {
+
+
+
+scrape_trading_names_df <- function(file_name) {
   
-  other_ent_nodes <- getNodeSet(node, 'OtherEntity')
+  xml_parse <- read_xml(file_name)
+  root <- xml_root(xml_parse)
+  nodes <- xml_find_all(root, 'OtherEntity')
   
-  if(length(other_ent_nodes)) {
+  abn <- xml_text(xml_find_first(nodes, 'abn'))
+  name <- xml_text(xml_find_first(nodes, 'name'))
+  type <- xml_text(xml_find_first(nodes, 'type'))
+  df <- data.frame(abn = abn, name = name, type = type, stringsAsFactors = FALSE)
+  return(df)
     
-    abn <- xmlValue(getNodeSet(node, 'ABN')[[1]])
-    
-    type <- unlist(lapply(other_ent_nodes, function(x) {xmlGetAttr(getNodeSet(x, 'NonIndividualName')[[1]], 'type')}))
-    name <- unlist(lapply(other_ent_nodes, 
-                          function(x) {xmlValue(getNodeSet(getNodeSet(x, 'NonIndividualName')[[1]], 'NonIndividualNameText')[[1]])}))
-    
-    df <- data.frame(name = name, type = type)
-    
-    df$abn <- abn
-    
-    df <- df[, c('abn', 'name', 'type')]
-    
-  } else{
-    
-    
-    df <- data.frame(matrix(nrow = 0, ncol = 0))
-    
-    
-  }
+}
+
+
+scrape_dgr_df <- function(file_name) {
   
+  xml_parse <- read_xml(file_name)
+  root <- xml_root(xml_parse)
+  nodes <- xml_find_all(root, 'DGR')
+
+  abn <- xml_text(xml_find_first(nodes, 'abn'))
+  name <- xml_text(xml_find_first(nodes, 'name'))
+  type <- xml_text(xml_find_first(nodes, 'type'))
+  dgr_status_from_date <- ymd(xml_text(xml_find_first(nodes, 'dgr_status_from_date')))
+  df <- data.frame(abn = abn, name = name, 
+                   type = type, dgr_status_from_date = dgr_status_from_date, stringsAsFactors = FALSE)
   return(df)
   
 }
 
 
-scrape_dgr_df <- function(node) {
+
+delete_old_abn_tables <- function() {
   
-  dgr_nodes <- getNodeSet(node, 'DGR')
+  pg <- dbConnect(PostgreSQL())
   
-  if(length(dgr_nodes)) {
+  if(dbExistsTable(pg, c("abn_lookup", "abns"))) {
     
-    abn <- xmlValue(getNodeSet(node, 'ABN')[[1]])
-    
-    dgr_status_from_date <- do.call(c, lapply(dgr_nodes, function(x) {ymd(xmlGetAttr(x, 'DGRStatusFromDate'))}))
-    type <- unlist(lapply(dgr_nodes, function(x) {xmlGetAttr(getNodeSet(x, 'NonIndividualName')[[1]], 'type')}))
-    name <- unlist(lapply(dgr_nodes, 
-                          function(x) {xmlValue(getNodeSet(getNodeSet(x, 'NonIndividualName')[[1]], 'NonIndividualNameText')[[1]])}))
-    
-    df <- data.frame(name = name, type = type, dgr_status_from_date = dgr_status_from_date)
-    
-    df$abn <- abn
-    
-    df <- df[, c('abn', 'name', 'type', 'dgr_status_from_date')]
-    
-  } else{
-    
-    
-    df <- data.frame(matrix(nrow = 0, ncol = 0))
-    
+    dbExecute(pg, 'DROP TABLE abn_lookup.abns')
     
   }
   
-  return(df)
+  if(dbExistsTable(pg, c("abn_lookup", "trading_names"))) {
+    
+    dbExecute(pg, 'DROP TABLE abn_lookup.trading_names')
+    
+  }
+  
+  if(dbExistsTable(pg, c("abn_lookup", "dgr"))) {
+    
+    dbExecute(pg, 'DROP TABLE abn_lookup.dgr')
+    
+  }
+  
+  dbDisconnect(pg)
+  
+}
+
+initialize_new_abn_lookup_tables <- function(pg) {
+  
+  pg <- dbConnect(PostgreSQL())
+  
+  sql_make_main <- "CREATE TABLE abn_lookup.abns (
+                      abn TEXT,
+                      abn_status TEXT,
+                      abn_status_from_date DATE,
+                      record_last_updated_date DATE,
+                      replaced TEXT,
+                      entity_type_index TEXT,
+                      entity_type_text TEXT,
+                      asic_number TEXT,
+                      asic_number_type TEXT,
+                      gst_status TEXT,
+                      gst_status_from_date TEXT,
+                      main_ent_type TEXT,
+                      main_ent_name TEXT,
+                      main_ent_add_state TEXT,
+                      main_ent_add_postcode TEXT,
+                      legal_ent_type TEXT,
+                      legal_ent_title TEXT, 
+                      legal_ent_family_name TEXT, 
+                      legal_ent_given_names TEXT, 
+                      legal_ent_add_state TEXT, 
+                      legal_ent_add_postcode TEXT)
+                     "
+  
+  sql_make_trading_names <- "CREATE TABLE abn_lookup.trading_names (
+                                abn TEXT, 
+                                name TEXT, 
+                                type TEXT)"
+  
+  sql_make_dgr <- "CREATE TABLE abn_lookup.dgr (
+                      abn TEXT, 
+                      name TEXT, 
+                      type TEXT, 
+                      dgr_status_from_date DATE)"
+  
+  dbExecute(pg, sql_make_main)
+  dbExecute(pg, sql_make_trading_names)
+  dbExecute(pg, sql_make_dgr)
+  
+  dbDisconnect(pg)
   
 }
 
 
-process_abr_node_data <- function(node, pg) {
-  
-  main_df <- scrape_main_ABN_df(node)
-  trading_names_df <- scrape_trading_names_df(node)
-  dgr_df <- scrape_dgr_df(node)
-  
-  
-  dbWriteTable(pg, c("abn_lookup", "abns"),
-               main_df, append = TRUE, row.names = FALSE)
-  dbWriteTable(pg, c("abn_lookup", "trading_names"),
-               trading_names_df, append = TRUE, row.names = FALSE)
-  dbWriteTable(pg, c("abn_lookup", "dgr"),
-               dgr_df, append = TRUE, row.names = FALSE)
-  
-
-}
 
 
-download_xml_files <- function() {
-  
-  abr_download_url <- "http://data.gov.au/dataset/abn-bulk-extract"
-  
-  
-  
-  
-}
-
-remDr <- remoteDriver(remoteServerAddr = "localhost"
-                      , port = 4444
-                      , browserName = "firefox"
-)
-
-
-driver <- rsDriver(browser=c("firefox"))
-remote_driver <- driver[["client"]]
-remote_driver$open()
-
-driver <- rsDriver(browser=c("chrome"))
-remote_driver <- driver[["client"]]
-remote_driver$open()
+delete_old_abn_tables()
+initialize_new_abn_lookup_tables()
 
 pg <- dbConnect(PostgreSQL())
 
+file_list <- list.files('xml_files/')
+main_files <- paste0('xml_files/', grep('^main', file_list, value = TRUE))
+trading_names_files <- paste0('xml_files/', grep('^trading_names', file_list, value = TRUE))
+dgr_files <- paste0('xml_files/', grep('^dgr', file_list, value = TRUE))
 
-xml_parse <- xmlParse('20190710_Public02.xml')
-xml_root <- xmlRoot(xml_parse)
 
-abr_nodes <- getNodeSet(xml_root, 'ABR')
-
-table(unlist(mclapply(abr_nodes, function(x) {names(xmlAttrs(x))}, mc.cores = 24)))
-
-table(unlist(mclapply(abr_nodes, function(x) {sum(names(xmlAttrs(x)) == 'recordLastUpdatedDate')}, mc.cores = 24)))
-table(unlist(mclapply(abr_nodes, function(x) {sum(names(xmlAttrs(x)) == 'replaced')}, mc.cores = 24)))
-
+for(i in 1:length(main_files)) {
+  
+  print(paste0("Processing file ", i))
+  main_df <- scrape_main_ABN_df(main_files[i])
+  dbWriteTable(pg, c("abn_lookup", "abns"),
+               main_df, append = TRUE, row.names = FALSE)
+  print(paste0("Successfully processed ", nrow(main_df), " entries into abn_lookup.abns"))
+  trading_names_df <- scrape_trading_names_df(trading_names_files[i])
+  dbWriteTable(pg, c("abn_lookup", "trading_names"),
+               trading_names_df, append = TRUE, row.names = FALSE)
+  print(paste0("Successfully processed ", nrow(trading_names_df), " entries into abn_lookup.trading_names"))
+  dgr_df <- scrape_dgr_df(dgr_files[i])
+  dbWriteTable(pg, c("abn_lookup", "dgr"),
+               dgr_df, append = TRUE, row.names = FALSE)
+  print(paste0("Successfully processed ", nrow(dgr_df), " entries into abn_lookup.dgr"))
+  
+}
 
 
 dbDisconnect(pg)
 
-no_given_names <- which(unlist(mclapply(has_leg_ent, function(x) {sum(names(xmlChildren(getNodeSet(getNodeSet(abr_nodes[[x]], 'LegalEntity')[[1]], 'IndividualName')[[1]])) == 'GivenName')}, mc.cores = 24)) == 0)
-df <- bind_rows(lapply(no_given_names, function (x) {process_ABR_node(abr_nodes[[has_leg_ent[x]]])}), .id = "column_label") %>% collect()
 
 

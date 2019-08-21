@@ -16,7 +16,7 @@ scrape_main_ABN_df <- function(file_name) {
   root <- xml_root(xml_parse)
   nodes <- xml_find_all(root, 'ABR')
 
-  all_cols <- c('abn', 'abn_status', 'abn_status_from_date', 'record_last_updated_date', 'replaced', 'entity_type_index', 
+  all_cols <- c('abn', 'abn_status', 'abn_status_from_date', 'record_last_updated_date', 'replaced', 'entity_type_ind', 
                 'entity_type_text', 'asic_number', 'asic_number_type', 'gst_status', 'gst_status_from_date', 
                 'main_ent_type', 'main_ent_name', 'main_ent_add_state', 'main_ent_add_postcode', 'legal_ent_type', 
                 'legal_ent_title', 'legal_ent_family_name', 'legal_ent_given_names', 'legal_ent_add_state', 
@@ -29,7 +29,8 @@ scrape_main_ABN_df <- function(file_name) {
   df$abn_status_from_date <- ymd(xml_text(xml_find_first(nodes, 'abn_status_from_date')))
   df$record_last_updated_date <- ymd(xml_text(xml_find_first(nodes, 'record_last_updated_date')))
   df$replaced <- xml_text(xml_find_first(nodes, 'replaced'))
-  df$entity_type_index <- xml_text(xml_find_first(nodes, 'entity_type_index'))
+  df$entity_type_ind <- xml_text(xml_find_first(nodes, 'entity_type_ind'))
+  df$entity_type_text <- xml_text(xml_find_first(nodes, 'entity_type_text'))
   df$asic_number <- xml_text(xml_find_first(nodes, 'asic_number'))
   df$asic_number_type <- xml_text(xml_find_first(nodes, 'asic_number_type'))
   df$gst_status <- xml_text(xml_find_first(nodes, 'gst_status'))
@@ -123,7 +124,7 @@ initialize_new_abn_lookup_tables <- function(pg) {
                       abn_status_from_date DATE,
                       record_last_updated_date DATE,
                       replaced TEXT,
-                      entity_type_index TEXT,
+                      entity_type_ind TEXT,
                       entity_type_text TEXT,
                       asic_number TEXT,
                       asic_number_type TEXT,

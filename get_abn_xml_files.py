@@ -1,4 +1,5 @@
 import os
+import subprocess
 import re
 from bs4 import BeautifulSoup
 from selenium import webdriver
@@ -11,47 +12,154 @@ from time import sleep
 import zipfile
 import datetime as dt
 
+
+
+def count_nodes(file_name, node_type):
+
+    node_regex = "</" + node_type + ">|<" + node_type + "/>|<" + node_type + " />"
+
+    egrep = subprocess.Popen(['egrep', '-o', node_regex, file_name], stdout=subprocess.PIPE)
+
+    count = subprocess.Popen(['wc', '-l'],
+                            stdin=egrep.stdout,
+                            stdout=subprocess.PIPE,
+                            )
+
+    end_of_pipe = count.stdout
+    result = int(re.sub('[\n\s\r\t]*', '',end_of_pipe.read().decode()))
     
+    return(result)
+    
+    
+    
+
+def write_table_data_from_xml_file(path, table_name):
+
+    xsl_file = "xml_to_csv_" + table_name + ".xsl"
+
+    err = open('err.txt', 'w')
+    
+    xslt = subprocess.Popen(["xsltproc", xsl_file, path], stdout=subprocess.PIPE, \
+                            stderr=err, universal_newlines=True)
+
+    write_sql = "COPY abn_lookup." + table_name + \
+                        " FROM STDIN CSV HEADER DELIMITER E'\\t' QUOTE E'\\b' ENCODING 'utf-8';"
+    
+    psql = subprocess.Popen(["psql", "-d", "crsp", "-c", write_sql], stdin=xslt.stdout, stdout=subprocess.PIPE, \
+                            stderr=err, universal_newlines=True)
+
+    output, _ = psql.communicate()
+    
+    err.close()
+    
+    err = open('err.txt', 'r')
+    
+    error = err.read()
+    
+    err.close()
+    
+    os.remove('err.txt')
+    
+    if(len(error) == 0):
+        error = None
+
+    return output, error
+    
+
     
 def process_xml_file(path):
     
-    # Note: this assumes path being the full path to the file, ie. directory/file_name
+    # First count the number of the fundamental nodes for each table: ABR for abns, OtherEntity for trading_names
+    # DGR for dgr. These correspond to the number of rows that should be read into each table from the file in path
     
-    command_main = "xsltproc xml_to_csv_main.xsl " + path +     \
-                    " | psql -d crsp -c \"COPY abn_lookup.abns " +    \
-                    "FROM STDIN CSV HEADER DELIMITER E'\\t' QUOTE E'\\b' ENCODING 'utf-8';\""
-    
-    command_trd = "xsltproc xml_to_csv_trading_names.xsl " + path +     \
-                    " | psql -d crsp -c \"COPY abn_lookup.trading_names " +    \
-                    "FROM STDIN CSV HEADER DELIMITER E'\\t' QUOTE E'\\b' ENCODING 'utf-8';\""
-    
-    command_dgr = "xsltproc xml_to_csv_dgr.xsl " + path +     \
-                    " | psql -d crsp -c \"COPY abn_lookup.dgr " +    \
-                    "FROM STDIN CSV HEADER DELIMITER E'\\t' QUOTE E'\\b' ENCODING 'utf-8';\""
+    numrows_abns = count_nodes(path, 'ABR')
+    numrows_trading_names = count_nodes(path, 'OtherEntity')
+    numrows_dgr = count_nodes(path, 'DGR')
     
     
-    # Note: os.system returns 0 if command is successful, thus write outputs as failures and then test
-    failure_main = os.system(command_main)
-    failure_trd = os.system(command_trd)
-    failure_dgr = os.system(command_dgr)
+    # Note: this assumes path being the full path to the file, ie. directory/file_name    
+    
+    write_abns_output, write_abns_error = write_table_data_from_xml_file(path, 'abns')
+    write_trading_names_output, write_trading_names_error = write_table_data_from_xml_file(path, 'trading_names')
+    write_dgr_output, write_dgr_error = write_table_data_from_xml_file(path, 'dgr')
+    
+    success_abns = (write_abns_output == "COPY " + str(numrows_abns) + "\n")
+    success_trading_names = (write_trading_names_output == "COPY " + str(numrows_trading_names) + "\n")
+    success_dgr = (write_dgr_output == "COPY " + str(numrows_dgr) + "\n")
 
-    if not (failure_main+failure_trd+failure_dgr):
-        
-        return(True)
     
+    if(not success_abns):
+
+        if(re.match('COPY [0-9]+\n', write_abns_output)):
+            num_abns_written = re.search('[0-9]+', write_abns_output).group(0)
+
+            print("Error in process_xml_file: expected to write " + str(numrows_abns) + \
+              " records to abn_lookup.abns from " + path + ", " + num_abns_written + " were written")
+
+        else:
+
+            print("Error in process_xml_file: expected to write " + str(numrows_abns) + \
+              " records to abn_lookup.abns from " + path + ", 0 were written")
+
+
+
+    if(not success_trading_names):
+
+        if(re.match('COPY [0-9]+\n', write_trading_names_output)):
+            num_trds_written = re.search('[0-9]+', write_trading_names_output).group(0)
+
+            print("Error in process_xml_file: expected to write " + str(numrows_trading_names) + \
+              " records to abn_lookup.trading_names from " + path + ", " + num_trds_written + " were written")
+
+        else:
+
+            print("Error in process_xml_file: expected to write " + str(numrows_trading_names) + \
+              " records to abn_lookup.trading_names from " + path + ", 0 were written")
+
+
+    if(not success_dgr):
+
+        if(re.match('COPY [0-9]+\n', write_dgr_output)):
+            num_dgr_written = re.search('[0-9]+', write_dgr_output).group(0)
+
+            print("Error in process_xml_file: expected to write " + str(numrows_dgr) + \
+              " records to abn_lookup.dgr from " + path + ", " + num_dgr_written + " were written")
+
+        else:
+
+            print("Error in process_xml_file: expected to write " + str(numrows_dgr) + \
+              " records to abn_lookup.dgr from " + path + ", 0 were written")
+                    
+            return(False)
+            
+            
+    
+    if(write_abns_error is None and write_trading_names_error is None and write_dgr_error is None):
+    
+        if(success_abns and success_trading_names and success_dgr):
+
+            return(True)
+        
+        else:
+            return(False)
+        
     else:
         
-        if(failure_main):
+        if(write_abns_error):
+            print("From write_table_data_from_xml_file('" + path + "', 'abns'): ")
+            print(write_abns_error)
             
-            print("Error in process_xml_file: failure to write to abn_lookup.abns for file " + path)
+        if(write_trading_names_error):
+            print("From write_table_data_from_xml_file('" + path + "', 'trading_names'): ")
+            print(write_trading_names_error)
             
-        if(failure_trd):
-            print("Error in process_xml_file: failure to write to abn_lookup.trading_names for file " + path)
-            
-        if(failure_dgr):
-            print("Error in process_xml_file: failure to write to abn_lookup.dgr for file " + path)
+        if(write_trading_names_error):
+            print("From write_table_data_from_xml_file('" + path + "', 'dgr'): ")
+            print(write_dgr_error)
             
         return(False)
+
+
 
 
 

@@ -1,9 +1,9 @@
 -- This is a program which drops the old abn_lookup tables (if they exist), then makes new tables for the updated data to be written into. 
 -- Also, as a last step, this program sets the ownership to abn_lookup and access to abn_lookup_access for each table
 
-DROP TABLE IF EXISTS abn_lookup.abns;
-DROP TABLE IF EXISTS abn_lookup.trading_names;
-DROP TABLE IF EXISTS abn_lookup.dgr;
+ALTER TABLE IF EXISTS abn_lookup.abns RENAME TO abns_old;
+ALTER TABLE IF EXISTS abn_lookup.trading_names RENAME TO trading_names_old;
+ALTER TABLE IF EXISTS abn_lookup.dgr RENAME TO dgr_old;
 
 
 CREATE TABLE abn_lookup.abns (

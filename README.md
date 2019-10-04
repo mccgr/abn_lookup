@@ -39,9 +39,9 @@ This table has an entry for each ABN number that has ever been registered, along
   
   - `asic_number_type`: the type of the `asic_number` (note: so far, it seems the ABR does not really make use of this column)
  
-  - `gst_status`: this field details whether the entity has registered for the GST. If so, this field is equal to the string 'ACT', otherwise it is null. 
+  - `gst_status`: this field details whether the entity has or has ever registered for the GST. If the entity currently registered, this field is equal to the string 'ACT'. If the entity has been registered for the GST but the registration has since been cancelled, this field is equal to 'CAN'. If the entity has never registered for the GST, this field is equal to 'NON'.
   
-  - `gst_status_from_date`: the date on which the entity was registered for the GST
+  - `gst_status_from_date`: the date on which the entity was registered for the GST. Equal to NULL if `gst_status` is 'NON'.
   
   - `main_ent_type`: the type of main entity, if applicable (note: this column may be redundant)
  

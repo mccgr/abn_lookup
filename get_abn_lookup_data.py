@@ -263,6 +263,14 @@ if(success):
     os.system("psql -d crsp < delete_old_abn_lookup_tables.sql")
     os.rmdir(download_dir)
     
+    # Finally, add comments to the tables
+    
+    time = dt.datetime.now()
+    comment = "Created by get_abn_lookup_data.py on " + str(time)
+    os.system("psql -d crsp -c \"COMMENT ON TABLE abn_lookup.abns IS '%s'\"" % comment)
+    os.system("psql -d crsp -c \"COMMENT ON TABLE abn_lookup.trading_names IS '%s'\"" % comment)
+    os.system("psql -d crsp -c \"COMMENT ON TABLE abn_lookup.dgr IS '%s'\"" % comment)
+    
 else:    
     # success is only false here if for some xml file, process_xml_file returned false, leading to the loop being broken (and success not being subsequently updated)
     # In this case, remove the incomplete tables, rename the old ones back to the proper names

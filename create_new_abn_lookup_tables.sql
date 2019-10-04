@@ -18,7 +18,7 @@ CREATE TABLE abn_lookup.abns (
   asic_number TEXT,
   asic_number_type TEXT,
   gst_status TEXT,
-  gst_status_from_date TEXT,
+  gst_status_from_date DATE,
   main_ent_type TEXT,
   main_ent_name TEXT,
   main_ent_add_state TEXT,

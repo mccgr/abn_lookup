@@ -263,6 +263,9 @@ if(success):
     os.system("psql -d crsp < delete_old_abn_lookup_tables.sql")
     os.rmdir(download_dir)
     
+    # Fix gst_status_from_date for entries with gst_status set to 'NON' (we want it NULL here, not set to 1900-01-01)
+    os.system("psql -d crsp -c \"UPDATE abn_lookup.abns SET gst_status_from_date = NULL WHERE gst_status = 'NON'\"")
+    
     # Finally, add comments to the tables
     
     time = dt.datetime.now()

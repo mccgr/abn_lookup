@@ -173,7 +173,7 @@ def delete_full_directory(directory):
 
 
 
-download_dir = "/home/bdcallen/abn_lookup/xml_files"
+download_dir = os.getenv("ABN_LOOKUP_DIR") + "/xml_files"
 
 if(os.path.exists(download_dir)):
     delete_full_directory(download_dir)
@@ -232,7 +232,7 @@ for file_url in xml_file_list:
 # Now, let's process the xml files using xslt transformation and piping into a psql command
 
 
-# Step 1, delete the old tables and make new ones for storing the new data, with create_new_abn_lookup_tables.sql
+# Step 1, rename the old tables and make new ones for storing the new data, with create_new_abn_lookup_tables.sql
 os.system("psql -d crsp < create_new_abn_lookup_tables.sql")
 
 # Now, iterate over the xml_files, using process_xml_file to write the data to postgres
@@ -257,9 +257,23 @@ for i in range(len(xml_paths)):
         break
 
 
-if(len(os.listdir(download_dir)) == 0):
-    
+if(success):
+    # if success is true here, it was true for all xml files, hence all have been successfully processed (otherwise the loop is broken and it keeps its false value). Hence delete old tables. Also, as all the xml files were deleted
+    # from the xml_files directory after they were processed, this directory is now empty. So os.rmdir it.
+    os.system("psql -d crsp < delete_old_abn_lookup_tables.sql")
     os.rmdir(download_dir)
+    
+else:    
+    # success is only false here if for some xml file, process_xml_file returned false, leading to the loop being broken (and success not being subsequently updated)
+    # In this case, remove the incomplete tables, rename the old ones back to the proper names
+    os.system("psql -d crsp < keep_old_abn_lookup_tables.sql")
+
+
+
+
+
+    
+    
 
 
 

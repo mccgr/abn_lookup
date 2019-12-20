@@ -82,7 +82,21 @@ This table contains all the donation gift recipient (DGR) items of an entity wit
  - `type`: the type of the name (seems this is always 'DGR', so probably redundant).
  - `dgr_status_from_date`: the date that the DGR item was registered.
  
+ ## The code
+
+ - `get_abn_lookup_data.py`: this is the main program. It uses an automated, headless Selenium web browser to navigate to the download pages for the ABN Bulk Extract data on `data.gov.au`, downloads the two zip files, then extracts the xml files from the zips into a temporary directory `abn_lookup/xml_files`, then uses the programs described below to convert the xml files into a number of csv outputs. These csv outputs are piped into a command which writes these outputs directly into the tables `abns`, `trading_names` and `dgr`, using a `psql` command. This program then decides, based on the success of failure to do the previous task, to either delete the old tables and keep the new ones, or delete the new ones produced and keep the old tables, using a number of sql scripts also described below. 
  
+ - `xml_to_csv_abns.xsl`: this is an xsl script to be used by the program XSLT, in order to perform an XSLT transformation of one of the original xml files into a csv format which corresponds to the structure of the table `abns`. This output is piped and then written into this table. 
+ 
+ - `xml_to_csv_trading_names.xsl`: same as the above, but for the `trading_names` table.
+  
+ - `xml_to_csv_dgr.xsl`: same as the above, but for the `dgr` table.
+ 
+ - `create_new_abn_lookup_tables.sql`: this sql script renames the current tables in `abn_lookup` to `abns_old`, `trading_names_old` and `dgr_old`, then creates new tables with the names `abns`, `trading_names` and `dgr`.
+ 
+ - `delete_old_abn_lookup_tables.sql`: this sql script deletes `abns_old`, `trading_names_old` and `dgr_old`. This is utilized by `get_abn_lookup_data.py` in the case that the processing of all the xml files from ABN bulk extract is successful.
+ 
+ - `keep_old_abn_lookup_tables.sql`: this sql script deletes the newly produced `abns`, `trading_names` and `dgr`, then renames `abns_old`, `trading_names_old` and `dgr_old` back to their original names. This is utilized by `get_abn_lookup_data.py` in the case that there has been some failure to process one or more of the xml files from ABN bulk extract.
  
  
  

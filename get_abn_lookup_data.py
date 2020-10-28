@@ -1,6 +1,7 @@
 import os
 import subprocess
 import re
+import pandas as pd
 from bs4 import BeautifulSoup
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
@@ -11,7 +12,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from time import sleep
 import zipfile
 import datetime as dt
-
+from sqlalchemy import create_engine
 
 
 def count_nodes(file_name, node_type):
@@ -30,11 +31,39 @@ def count_nodes(file_name, node_type):
     
     return(result)
     
+
+def xslt_process_to_pg(table_name, engine, p):
+    # The first line has the variable names ...
+    
+    var_names = p.stdout.readline().rstrip().lower().split(sep="\t")
+    
+    # ... the rest is the data
+    copy_cmd =  "COPY " + "abn_lookup." + table_name + " (" + ", ".join(var_names) + ")"
+    copy_cmd +=  " FROM STDIN CSV DELIMITER E'\\t' QUOTE E'\\b' ENCODING 'utf-8';"
+    
+    connection = engine.raw_connection()
+    try:
+        cursor = connection.cursor()
+        cursor.copy_expert(copy_cmd, p.stdout)
+        cursor.close()
+        connection.commit()
+        result = True
+        error = None
+        
+    except Exception as e: 
+        
+        result = False
+        error = e
+      
+    finally:
+        connection.close()
+        p.stdout.close()
+        
+    return result, error
     
     
-
-def write_table_data_from_xml_file(path, table_name):
-
+def get_xslt_process(path, table_name):    
+    
     abn_lookup_dir = os.getenv("ABN_LOOKUP_DIR")
     xsl_file = abn_lookup_dir + "/xml_to_csv_" + table_name + ".xsl"
 
@@ -42,33 +71,22 @@ def write_table_data_from_xml_file(path, table_name):
     
     xslt = subprocess.Popen(["xsltproc", xsl_file, path], stdout=subprocess.PIPE, \
                             stderr=err, universal_newlines=True)
+    
+    return(xslt)
 
-    write_sql = "COPY abn_lookup." + table_name + \
-                        " FROM STDIN CSV HEADER DELIMITER E'\\t' QUOTE E'\\b' ENCODING 'utf-8';"
-    
-    psql = subprocess.Popen(["psql", "-d", "crsp", "-c", write_sql], stdin=xslt.stdout, stdout=subprocess.PIPE, \
-                            stderr=err, universal_newlines=True)
 
-    output, _ = psql.communicate()
-    
-    err.close()
-    
-    err = open(abn_lookup_dir + '/err.txt', 'r')
-    
-    error = err.read()
-    
-    err.close()
-    
-    os.remove(abn_lookup_dir + '/err.txt')
-    
-    if(len(error) == 0):
-        error = None
+def write_table_data_from_xml_file(path, table_name, engine):
 
-    return output, error
+    xslt = get_xslt_process(path, table_name)
     
+    result, error = xslt_process_to_pg(table_name, engine, xslt)
+
+    return result, error
 
     
-def process_xml_file(path):
+    
+    
+def process_xml_file(path, engine):
     
     # First count the number of the fundamental nodes for each table: ABR for abns, OtherEntity for trading_names
     # DGR for dgr. These correspond to the number of rows that should be read into each table from the file in path
@@ -80,19 +98,27 @@ def process_xml_file(path):
     
     # Note: this assumes path being the full path to the file, ie. directory/file_name    
     
-    write_abns_output, write_abns_error = write_table_data_from_xml_file(path, 'abns')
-    write_trading_names_output, write_trading_names_error = write_table_data_from_xml_file(path, 'trading_names')
-    write_dgr_output, write_dgr_error = write_table_data_from_xml_file(path, 'dgr')
+    num_abns_before = pd.read_sql('SELECT COUNT(*) AS count FROM abn_lookup.abns', engine).loc[0, 'count']
+    num_trading_names_before = pd.read_sql('SELECT COUNT(*) AS count FROM abn_lookup.trading_names', engine).loc[0, 'count']
+    num_dgr_before = pd.read_sql('SELECT COUNT(*) AS count FROM abn_lookup.dgr', engine).loc[0, 'count']
     
-    success_abns = (write_abns_output == "COPY " + str(numrows_abns) + "\n")
-    success_trading_names = (write_trading_names_output == "COPY " + str(numrows_trading_names) + "\n")
-    success_dgr = (write_dgr_output == "COPY " + str(numrows_dgr) + "\n")
+    
+    success_abns, write_abns_error = write_table_data_from_xml_file(path, 'abns', engine)
+    success_trading_names, write_trading_names_error = write_table_data_from_xml_file(path, 'trading_names', engine)
+    success_dgr, write_dgr_error = write_table_data_from_xml_file(path, 'dgr', engine)
+    
+    num_abns_after = pd.read_sql('SELECT COUNT(*) AS count FROM abn_lookup.abns', engine).loc[0, 'count']
+    num_trading_names_after = pd.read_sql('SELECT COUNT(*) AS count FROM abn_lookup.trading_names', engine).loc[0, 'count']
+    num_dgr_after = pd.read_sql('SELECT COUNT(*) AS count FROM abn_lookup.dgr', engine).loc[0, 'count']
+    
+    num_abns_written = num_abns_after - num_abns_before
+    num_trading_names_written = num_trading_names_after - num_trading_names_before
+    num_dgr_written = num_dgr_after - num_dgr_before
 
     
-    if(not success_abns):
+    if(not (success_abns and num_abns_written == numrows_abns)):
 
-        if(re.match('COPY [0-9]+\n', write_abns_output)):
-            num_abns_written = re.search('[0-9]+', write_abns_output).group(0)
+        if(num_abns_read > 0):
 
             print("Error in process_xml_file: expected to write " + str(numrows_abns) + \
               " records to abn_lookup.abns from " + path + ", " + num_abns_written + " were written")
@@ -104,13 +130,12 @@ def process_xml_file(path):
 
 
 
-    if(not success_trading_names):
+    if(not (success_trading_names and num_trading_names_written == numrows_trading_names)):
 
-        if(re.match('COPY [0-9]+\n', write_trading_names_output)):
-            num_trds_written = re.search('[0-9]+', write_trading_names_output).group(0)
+        if(num_trading_names_written > 0):
 
             print("Error in process_xml_file: expected to write " + str(numrows_trading_names) + \
-              " records to abn_lookup.trading_names from " + path + ", " + num_trds_written + " were written")
+              " records to abn_lookup.trading_names from " + path + ", " + num_trading_names_written + " were written")
 
         else:
 
@@ -118,10 +143,9 @@ def process_xml_file(path):
               " records to abn_lookup.trading_names from " + path + ", 0 were written")
 
 
-    if(not success_dgr):
+    if(not (success_dgr and num_dgr_written == numrows_dgr)):
 
-        if(re.match('COPY [0-9]+\n', write_dgr_output)):
-            num_dgr_written = re.search('[0-9]+', write_dgr_output).group(0)
+        if(num_dgr_written > 0):
 
             print("Error in process_xml_file: expected to write " + str(numrows_dgr) + \
               " records to abn_lookup.dgr from " + path + ", " + num_dgr_written + " were written")
@@ -159,9 +183,7 @@ def process_xml_file(path):
             print(write_dgr_error)
             
         return(False)
-
-
-
+        
 
 
 def delete_full_directory(directory):
@@ -171,6 +193,118 @@ def delete_full_directory(directory):
         
     os.rmdir(directory)
 
+
+
+
+def make_sql_table_comment(table_name, comment, engine):
+            
+    sql = "COMMENT ON TABLE " + str(table_name) + " IS '%s'" % comment
+    connection = engine.connect()
+    trans = connection.begin()
+    connection.execute(sql)
+    trans.commit()
+    connection.close()
+    
+    
+    
+def set_table_ownership_access(table_name, schema, engine):
+    
+    owner = schema
+    access = schema + "_access"
+
+    line1 = "SET search_path TO " + schema + ";"
+    line2 = "ALTER TABLE " + table_name + " OWNER TO " + owner + ";"
+    line3 = "GRANT SELECT ON " + table_name + " TO " + access + ";"
+
+    sql = line1 + "\n\t\n" + line2 + "\n\t\n" + line3
+
+    connection = engine.connect()
+    trans = connection.begin()
+    connection.execute(sql)
+    trans.commit()
+    connection.close()
+
+
+def make_new_tables(engine):
+  
+    # Rename the current tables to be old tables (to be renamed back if data writing into new tables fails later on)
+  
+    engine.execute('ALTER TABLE IF EXISTS abn_lookup.abns RENAME TO abns_old')
+    engine.execute('ALTER TABLE IF EXISTS abn_lookup.trading_names RENAME TO trading_names_old')
+    engine.execute('ALTER TABLE IF EXISTS abn_lookup.dgr RENAME TO dgr_old')
+
+
+    make_abns_sql = """CREATE TABLE abn_lookup.abns (
+                    
+                          abn TEXT,
+                          abn_status TEXT,
+                          abn_status_from_date DATE,
+                          record_last_updated_date DATE,
+                          replaced TEXT,
+                          entity_type_ind TEXT,
+                          entity_type_text TEXT,
+                          asic_number TEXT,
+                          asic_number_type TEXT,
+                          gst_status TEXT,
+                          gst_status_from_date DATE,
+                          main_ent_type TEXT,
+                          main_ent_name TEXT,
+                          main_ent_add_state TEXT,
+                          main_ent_add_postcode TEXT,
+                          legal_ent_type TEXT,
+                          legal_ent_title TEXT, 
+                          legal_ent_family_name TEXT, 
+                          legal_ent_given_names TEXT, 
+                          legal_ent_add_state TEXT, 
+                          legal_ent_add_postcode TEXT
+                        
+                        );
+                    """
+
+
+    make_trading_names_sql = """CREATE TABLE abn_lookup.trading_names (
+                                
+                                  abn TEXT,
+                                  name TEXT,
+                                  "type" TEXT
+                                
+                                );
+                             """
+
+
+    make_dgr_sql = """CREATE TABLE abn_lookup.dgr (
+                        
+                          abn TEXT,
+                          name TEXT,
+                          "type" TEXT,
+                          dgr_status_from_date DATE
+                        
+                        );
+                   """
+
+    # Now instantiate new tables
+
+    engine.execute(make_abns_sql)
+    engine.execute(make_trading_names_sql)
+    engine.execute(make_dgr_sql)
+    
+    
+    # Finally, set ownership and access for new tables
+
+    set_table_ownership_access('abns', 'abn_lookup', engine)
+    set_table_ownership_access('trading_names', 'abn_lookup', engine)
+    set_table_ownership_access('dgr', 'abn_lookup', engine)
+    
+    
+    
+    
+    
+
+dbname = os.getenv("PGDATABASE")
+host = os.getenv("PGHOST", "localhost")
+conn_string = "postgresql://" + host + "/" + dbname
+
+engine = create_engine(conn_string)
 
 
 abn_lookup_dir = os.getenv("ABN_LOOKUP_DIR")
@@ -233,8 +367,9 @@ for file_url in xml_file_list:
 # Now, let's process the xml files using xslt transformation and piping into a psql command
 
 
-# Step 1, rename the old tables and make new ones for storing the new data, with create_new_abn_lookup_tables.sql
-os.system("psql -d crsp < " + abn_lookup_dir + "/create_new_abn_lookup_tables.sql")
+# Step 1, rename the old tables and make new ones for storing the new data
+
+make_new_tables(engine)
 
 # Now, iterate over the xml_files, using process_xml_file to write the data to postgres
 
@@ -245,7 +380,7 @@ for i in range(len(xml_paths)):
     
     print("Processing " + xml_file_names[i])
     t1 = dt.datetime.now()
-    success = process_xml_file(xml_paths[i])
+    success = process_xml_file(xml_paths[i], engine)
     t2 = dt.datetime.now()
     if(success):
         # File successfully process, remove file
@@ -259,39 +394,40 @@ for i in range(len(xml_paths)):
 
 
 if(success):
-    # if success is true here, it was true for all xml files, hence all have been successfully processed (otherwise the loop is broken and it keeps its false value). Hence delete old tables. Also, as all the xml files were deleted
-    # from the xml_files directory after they were processed, this directory is now empty. So os.rmdir it.
-    os.system("psql -d crsp < " + abn_lookup_dir + "/delete_old_abn_lookup_tables.sql")
-    os.rmdir(download_dir)
-    
+  
     # Fix gst_status_from_date for entries with gst_status set to 'NON' (we want it NULL here, not set to 1900-01-01)
-    os.system("psql -d crsp -c \"UPDATE abn_lookup.abns SET gst_status_from_date = NULL WHERE gst_status = 'NON'\"")
+    engine.execute("UPDATE abn_lookup.abns SET gst_status_from_date = NULL WHERE gst_status = 'NON'")
     
-    # Finally, add comments to the tables
     
     time = dt.datetime.now()
     comment = "Created by get_abn_lookup_data.py on " + str(time)
-    os.system("psql -d crsp -c \"COMMENT ON TABLE abn_lookup.abns IS '%s'\"" % comment)
-    os.system("psql -d crsp -c \"COMMENT ON TABLE abn_lookup.trading_names IS '%s'\"" % comment)
-    os.system("psql -d crsp -c \"COMMENT ON TABLE abn_lookup.dgr IS '%s'\"" % comment)
+    make_sql_table_comment('abn_lookup.abns', comment, engine)
+    make_sql_table_comment('abn_lookup.trading_names', comment, engine)
+    make_sql_table_comment('abn_lookup.dgr', comment, engine)
+
+    
+    # Making of new tables was successful, drop old tables
+    
+    engine.execute("DROP TABLE IF EXISTS abn_lookup.abns_old")
+    engine.execute("DROP TABLE IF EXISTS abn_lookup.trading_names_old")
+    engine.execute("DROP TABLE IF EXISTS abn_lookup.dgr_old")
+    
+    
+    os.rmdir(download_dir)
+    
     
 else:    
-    # success is only false here if for some xml file, process_xml_file returned false, leading to the loop being broken (and success not being subsequently updated)
+    # success is only false here if for some xml file, process_xml_file returned false, leading to the loop being broken 
+    # (and success not being subsequently updated)
     # In this case, remove the incomplete tables, rename the old ones back to the proper names
-    os.system("psql -d crsp < " + abn_lookup_dir + "/keep_old_abn_lookup_tables.sql")
-
-
-
-
-
     
-    
+    engine.execute("DROP TABLE IF EXISTS abn_lookup.abns")
+    engine.execute("DROP TABLE IF EXISTS abn_lookup.trading_names")
+    engine.execute("DROP TABLE IF EXISTS abn_lookup.dgr")
+
+    engine.execute("ALTER TABLE IF EXISTS abn_lookup.abns_old RENAME TO abns")
+    engine.execute("ALTER TABLE IF EXISTS abn_lookup.trading_names_old RENAME TO trading_names")
+    engine.execute("ALTER TABLE IF EXISTS abn_lookup.dgr_old RENAME TO dgr")
 
 
-
-
-
-
-
-
-    
+engine.dispose()
